@@ -1,6 +1,7 @@
 from configuracao import *
 from cadastro_usuario import*
 from cadastro_grupo import*
+from cadastro_mensagens import*
 import threading
 import socket
 
@@ -19,6 +20,20 @@ class Cliente():
 
         self.name = usuario
         self.enviarMensagem(self.name)
+
+        mensagens = []
+        buscar_mensag = buscar_mensagens(ler_mensagem())
+        for m in buscar_mensag:
+            if m.usuario == self.name:
+                mensagens.append(m.mensagem)
+                buscar_mensag.remove(m)
+
+        if len(mensagens) != 0:
+            print(f'\n----- Você recebeu {len(mensagens)} enquanto estava offline! -----\n')
+            for m in mensagens:
+                print(m + '\n')
+
+        atualizar_mensagens(buscar_mensag)
 
         self.thread_recv = threading.Thread(target=self.receberMensagem, args=())
         self.thread_recv.start()
@@ -66,7 +81,17 @@ class Cliente():
                     msg_tamanho = int(msg_tamanho)
                     msg = self.cliente.recv(msg_tamanho).decode(FORMAT)
 
-                    if ("-msg" in msg): #-msg U ou G NICK/GRUPO
+                    if ("-msgt" in msg): #-msg U ou G NICK/GRUPO
+                        message = msg.split(" ")
+                        op = message[5]
+                        if (op == 'C' or op == 'T'):
+                            text = ''
+                            message.pop(4)
+                            message.pop(4)
+                            for txt in message:
+                                text += txt + ' '
+                            print(text)
+                    elif ("-msg" in msg): #-msg U ou G NICK/GRUPO
                         message = msg.split(" ")
                         op = message[5]
                         if (op == 'U'):
@@ -93,6 +118,7 @@ class Cliente():
                                             for txt in message:
                                                 text += txt + ' '
                                             print(text)
+
                     else:
                         print(msg)
             except:

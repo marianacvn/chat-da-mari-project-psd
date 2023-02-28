@@ -4,6 +4,7 @@ from datetime import datetime
 
 from cadastro_usuario import*
 from cadastro_grupo import*
+from cadastro_mensagens import*
 from configuracao import *
 from grupo import*
 from usuario import*
@@ -17,7 +18,6 @@ class Servidor():
 
         self.servidor.bind(ADDR)
 
-        self.conectado = []
         self.usuario = []
         self.listaUsuarios = []
         self.grupos = buscar_grupos(ler_grupo())
@@ -30,50 +30,60 @@ class Servidor():
         self.servidor.listen()
         print(f"[LISTENING] Server is listening on {SERVER} port {PORT}")
 
+        self.usuario = ler_usuario()
+
+        for usr in self.usuario:
+            u = Usuario(usr, None, False)
+            self.listaUsuarios.append(u)
+
         self.assinar()
 
     def assinar(self):
         while self.ativo:
-            # try:
+            try:
                 conexao, addr = self.servidor.accept()
 
                 usuario = ''
                 tamanho_usuario = int(conexao.recv(HEADER).decode(FORMAT))
                 usuario = conexao.recv(tamanho_usuario).decode(FORMAT)
 
-                self.usuario = ler_usuario()
-
-                if (valida_usuario(self.usuario, usuario)):
-                    self.usuario.append(usuario)
-
-                for usr in self.usuario:
-                    u = Usuario(usr, None, False)
-                    if usr == usuario:
-                        u.conexao = conexao
-                        u.online = True
-                    self.listaUsuarios.append(u)
-
-                self.conectado.append(conexao)
-
+                for usr in self.listaUsuarios:
+                    if usr.login == usuario:
+                        usr.conexao = conexao
+                        usr.online = True
+                    else:
+                        if valida_usuario(self.usuario, usuario):
+                            u = Usuario(usuario, None, False)
+                            u.conexao = conexao
+                            u.online = True
+                            self.listaUsuarios.append(u)
+                            self.usuario.append(usuario)
 
                 thread = threading.Thread(target=self.atualizar, args=(conexao, usuario))
                 thread.start()
 
-                msg = f"{usuario} entrou no chat. Quantidade de Usuários {len(self.conectado)}."
+                conectados = 0
+
+                for u in self.listaUsuarios:
+                    if u.online == True:
+                        conectados +=1
+
+                msg = f"{usuario} entrou no chat. Quantidade de Usuários {conectados}."
                 self.mensagemServidor(msg)
 
-            # except:
-            #     print("[CLOSING] Server is closing.")
-            #     self.servidor.close()
-            #     self.ativo = False
-            #     return
+            except:
+                print("[CLOSING] Server is closing.")
+                self.servidor.close()
+                self.ativo = False
+                return
 
 
     def cancelarAssinatura(self, conexao, usuario):
-        index = self.conectado.index(conexao)
-
-        self.usuario.pop(index)
-        self.conectado.remove(conexao)
+        for u in self.listaUsuarios:
+            if u.conexao == conexao:
+                usr = Usuario(u.login, None, False)
+                self.listaUsuarios.append(usr)
+                self.listaUsuarios.remove(u)
 
         conexao.close()
 
@@ -109,8 +119,12 @@ class Servidor():
         if ("-listarusuarios" in msg):
 
             message = '\n-> Lista de usuários cadastrados:\n'
-            for txt in self.usuario:
-                message += '- ' + txt + '\n'
+            message += '-> Login  | Online:\n'
+            for txt in self.listaUsuarios:
+                status = 'Não'
+                if (txt.online == True):
+                    status = 'Sim'
+                message += '- ' + txt.login + ' - ' + status + '\n'
 
             self.mensagemPublica(message, conexao, usuario, True)
 
@@ -205,6 +219,33 @@ class Servidor():
                 if resultado:
                     self.mensagemPublica(f'O grupo {g.nome} não existe!', conexao, usuario, True)
 
+        elif ("-msgt" in msg):
+            message = msg.split(" ")
+
+            op = message[1]
+            if (op == 'C'):
+                for u in self.listaUsuarios:
+                    if u.online == True and u.conexao != conexao:
+                        self.mensagemPublica(msg, conexao, usuario, False)
+            elif (op == 'D'):
+                listaUsuOffline = []
+                for u in self.listaUsuarios:
+                    if u.online == False:
+                        listaUsuOffline.append(u)
+                self.mensagemOffline(msg, conexao, usuario, listaUsuOffline)
+            elif (op == 'T'):
+                for u in self.listaUsuarios:
+                    if u.online == True and u.conexao != conexao:
+                        self.mensagemPublica(msg, conexao, usuario, False)
+
+                listaUsuOffline = []
+                for u in self.listaUsuarios:
+                    if u.online == False:
+                        listaUsuOffline.append(u)
+                self.mensagemOffline(msg, conexao, usuario, listaUsuOffline)
+            else:
+                self.mensagemPublica(f'Comando não encontrado', conexao, usuario, True)
+
         elif ("-msg" in msg): #-msg U ou G NICK/GRUPO
             message = msg.split(" ")
 
@@ -229,8 +270,6 @@ class Servidor():
                 if resultado:
                     self.mensagemPublica(f'O grupo {gru} não existe!', conexao, usuario, True)
 
-        elif ("-msgt" in msg):
-            pass
         else:
             self.mensagemPublica(msg, conexao, usuario, False)
             msg = ''
@@ -241,9 +280,10 @@ class Servidor():
 
         mensagem, enviar_tamanho = codificarMensagem(msg)
 
-        for cliente in self.conectado:
-            cliente.send(enviar_tamanho)
-            cliente.send(mensagem)
+        for cliente in self.listaUsuarios:
+            if cliente.conexao != None:
+                cliente.conexao.send(enviar_tamanho)
+                cliente.conexao.send(mensagem)
 
     def mensagemPublica(self, msg, conexao, usuario, comando):
 
@@ -261,13 +301,37 @@ class Servidor():
             conexao.send(enviar_tamanhoMinha)
             conexao.send(mensagemMinha)
         else:
-            for cliente in self.conectado:
-                if(cliente != conexao):
-                    cliente.send(enviar_tamanho)
-                    cliente.send(mensagem)
-                else:
-                    cliente.send(enviar_tamanhoMinha)
-                    cliente.send(mensagemMinha)
+            for cliente in self.listaUsuarios:
+                if cliente.conexao != None:
+                    if(cliente.conexao != conexao):
+                        cliente.conexao.send(enviar_tamanho)
+                        cliente.conexao.send(mensagem)
+                    else:
+                        cliente.conexao.send(enviar_tamanhoMinha)
+                        cliente.conexao.send(mensagemMinha)
+
+    def mensagemOffline(self, msg, conexao, usuario, usuarios):
+
+        _data_atual = data_atual()
+
+        msgTodos = (f"{usuario} ({_data_atual}): {msg}")
+        msgMinha = (f"Eu ({_data_atual}): {msg}")
+        print(msgTodos)
+
+        mensagemMinha, enviar_tamanhoMinha = codificarMensagem(msgMinha)
+
+        for cliente in usuarios:
+            if(cliente.conexao != conexao):
+                message = msgTodos.split(" ")
+                text = ''
+                message.pop(4)
+                message.pop(4)
+                for txt in message:
+                    text += txt + ' '
+                cadastrar_mensagem(Mensagem(cliente.login, text))
+
+        conexao.send(enviar_tamanhoMinha)
+        conexao.send(mensagemMinha)
 
 
 def data_atual():
